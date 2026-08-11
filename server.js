@@ -290,6 +290,7 @@ app.post('/api/auth/login', async (req, res) => {
 });
 
 async function generateAIResponse(message, sessionId) {
+  // 1. Try Google Gemini API if key is present
   if (genAI) {
     const modelsToTry = ['gemini-1.5-flash', 'gemini-2.0-flash', 'gemini-pro'];
     for (const modelName of modelsToTry) {
@@ -300,7 +301,6 @@ async function generateAIResponse(message, sessionId) {
         });
 
         const historyRows = await getHistory(sessionId, 10);
-        // Format history according to Gemini spec (must alternate user and model)
         const validHistory = [];
         let expectedRole = 'user';
         for (const h of historyRows.slice(0, -1)) {
@@ -322,7 +322,6 @@ async function generateAIResponse(message, sessionId) {
       }
     }
 
-    // Direct generateContent fallback if chat history failed
     try {
       const model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
       const result = await model.generateContent(`${SYSTEM_PROMPT}\n\nUser: ${message}\nAleena:`);
@@ -333,38 +332,76 @@ async function generateAIResponse(message, sessionId) {
     }
   }
 
-  // Intelligent fallback conversational engine when offline or no key set
-  const lower = message.toLowerCase();
-  if (lower.includes('who are you') || lower.includes('your name')) {
-    return "I am Aleena AI, your intelligent 3D digital human assistant! I can help you answer questions, write code, manage tasks, and converse naturally.";
+  // 2. Free High-Performance AI Text Engine Fallback (Pollinations AI - No Key Required)
+  try {
+    const historyRows = await getHistory(sessionId, 6);
+    const messagesPayload = [
+      { role: 'system', content: SYSTEM_PROMPT },
+      ...historyRows.slice(0, -1).map(h => ({
+        role: h.role === 'user' ? 'user' : 'assistant',
+        content: h.content || ''
+      })),
+      { role: 'user', content: message }
+    ];
+
+    const response = await fetch('https://text.pollinations.ai/', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        messages: messagesPayload,
+        model: 'openai',
+        seed: Math.floor(Math.random() * 1000000)
+      })
+    });
+
+    if (response.ok) {
+      const aiText = await response.text();
+      if (aiText && aiText.trim()) {
+        console.log('[AI] Successfully generated response via Pollinations AI Engine.');
+        return aiText.trim();
+      }
+    }
+  } catch (err) {
+    console.error('[AI] Pollinations fallback error:', err.message);
   }
-  if (lower.includes('html form') || lower.includes('code to make html')) {
-    return `Here is a complete modern HTML form:
+
+  // 3. Smart pattern conversational fallback
+  const lower = message.toLowerCase();
+  if (lower.includes('who are you') || lower.includes('your name') || lower.includes('name allena') || lower.includes('name aleena')) {
+    return "I am Aleena AI, your intelligent 3D digital human assistant! I was named Aleena to serve as a warm, smart, and helpful companion capable of answering questions, writing code, and chatting with you.";
+  }
+  if (lower.includes('html') || lower.includes('code')) {
+    return `Here is a complete modern HTML page:
 
 \`\`\`html
-<form action="/submit" method="POST" style="max-width: 400px; margin: 20px auto; padding: 20px; border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.1);">
-  <h2>Contact Us</h2>
-  <div style="margin-bottom: 15px;">
-    <label for="name" style="display: block; margin-bottom: 5px;">Name:</label>
-    <input type="text" id="name" name="name" required style="width: 100%; padding: 8px; border-radius: 4px; border: 1px solid #ccc;">
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>My Aleena AI Webpage</title>
+  <style>
+    body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #0f172a; color: white; display: flex; justify-content: center; align-items: center; min-height: 100vh; margin: 0; }
+    .card { background: #1e293b; padding: 2rem; border-radius: 12px; box-shadow: 0 10px 25px rgba(0,0,0,0.5); text-align: center; max-width: 400px; }
+    button { background: #6366f1; color: white; border: none; padding: 10px 20px; font-size: 1rem; border-radius: 6px; cursor: pointer; margin-top: 1rem; }
+    button:hover { background: #4f46e5; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>Welcome to Aleena AI</h1>
+    <p>This is a modern HTML5 starter template.</p>
+    <button onclick="alert('Hello from Aleena AI!')">Click Me</button>
   </div>
-  <div style="margin-bottom: 15px;">
-    <label for="email" style="display: block; margin-bottom: 5px;">Email:</label>
-    <input type="email" id="email" name="email" required style="width: 100%; padding: 8px; border-radius: 4px; border: 1px solid #ccc;">
-  </div>
-  <div style="margin-bottom: 15px;">
-    <label for="message" style="display: block; margin-bottom: 5px;">Message:</label>
-    <textarea id="message" name="message" rows="4" required style="width: 100%; padding: 8px; border-radius: 4px; border: 1px solid #ccc;"></textarea>
-  </div>
-  <button type="submit" style="background: #4f46e5; color: white; border: none; padding: 10px 20px; border-radius: 6px; cursor: pointer;">Submit</button>
-</form>
+</body>
+</html>
 \`\`\``;
   }
   if (lower.includes('hi') || lower.includes('hello') || lower.includes('hey')) {
     return "Hello there! 👋 I am Aleena. How can I assist you today?";
   }
 
-  return `I received your request: "${message}". How can I help you further with this?`;
+  return `I received your message: "${message}". How can I assist you further with this?`;
 }
 
 // REST Chat & Generator Endpoints
