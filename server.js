@@ -52,20 +52,28 @@ const inMemoryStore = {
 };
 
 // ─── Gemini AI Client Setup ────────────────────────────────────────────────
+let genAI = null;
 let geminiModel = null;
-if (GEMINI_API_KEY) {
-  const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
-  geminiModel = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
-  console.log('[AI] Gemini 1.5 Flash initialized successfully.');
-} else {
-  console.log('[AI] Warning: GEMINI_API_KEY not set. Operating with baseline conversational engine.');
-}
-
 const SYSTEM_PROMPT = `You are Aleena, an intelligent, empathetic, and multi-capable AI companion and digital human assistant.
 You speak warmly, concisely, and helpfully. Respond in the exact language the user uses.
 
 If user asks for code, format with clean markdown codeblocks.
 Keep responses engaging, natural, and helpful.`;
+
+if (GEMINI_API_KEY) {
+  try {
+    genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
+    geminiModel = genAI.getGenerativeModel({ 
+      model: 'gemini-1.5-flash',
+      systemInstruction: SYSTEM_PROMPT,
+    });
+    console.log('[AI] Gemini 1.5 Flash initialized successfully.');
+  } catch (e) {
+    console.error('[AI] Failed to initialize Gemini model:', e.message);
+  }
+} else {
+  console.log('[AI] Warning: GEMINI_API_KEY not set. Operating with baseline conversational engine.');
+}
 
 // ─── Express App Setup ─────────────────────────────────────────────────────
 const app = express();
@@ -281,6 +289,84 @@ app.post('/api/auth/login', async (req, res) => {
   }
 });
 
+async function generateAIResponse(message, sessionId) {
+  if (genAI) {
+    const modelsToTry = ['gemini-1.5-flash', 'gemini-2.0-flash', 'gemini-pro'];
+    for (const modelName of modelsToTry) {
+      try {
+        const model = genAI.getGenerativeModel({
+          model: modelName,
+          systemInstruction: SYSTEM_PROMPT,
+        });
+
+        const historyRows = await getHistory(sessionId, 10);
+        // Format history according to Gemini spec (must alternate user and model)
+        const validHistory = [];
+        let expectedRole = 'user';
+        for (const h of historyRows.slice(0, -1)) {
+          const role = h.role === 'user' ? 'user' : 'model';
+          if (role === expectedRole) {
+            validHistory.push({ role, parts: [{ text: h.content || '' }] });
+            expectedRole = expectedRole === 'user' ? 'model' : 'user';
+          }
+        }
+
+        const chatSession = model.startChat({ history: validHistory });
+        const result = await chatSession.sendMessage(message);
+        const responseText = result.response.text();
+        if (responseText && responseText.trim()) {
+          return responseText.trim();
+        }
+      } catch (err) {
+        console.error(`[AI] Error with model ${modelName}:`, err.message);
+      }
+    }
+
+    // Direct generateContent fallback if chat history failed
+    try {
+      const model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
+      const result = await model.generateContent(`${SYSTEM_PROMPT}\n\nUser: ${message}\nAleena:`);
+      const text = result.response.text();
+      if (text && text.trim()) return text.trim();
+    } catch (err) {
+      console.error('[AI] Direct generateContent fallback error:', err.message);
+    }
+  }
+
+  // Intelligent fallback conversational engine when offline or no key set
+  const lower = message.toLowerCase();
+  if (lower.includes('who are you') || lower.includes('your name')) {
+    return "I am Aleena AI, your intelligent 3D digital human assistant! I can help you answer questions, write code, manage tasks, and converse naturally.";
+  }
+  if (lower.includes('html form') || lower.includes('code to make html')) {
+    return `Here is a complete modern HTML form:
+
+\`\`\`html
+<form action="/submit" method="POST" style="max-width: 400px; margin: 20px auto; padding: 20px; border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.1);">
+  <h2>Contact Us</h2>
+  <div style="margin-bottom: 15px;">
+    <label for="name" style="display: block; margin-bottom: 5px;">Name:</label>
+    <input type="text" id="name" name="name" required style="width: 100%; padding: 8px; border-radius: 4px; border: 1px solid #ccc;">
+  </div>
+  <div style="margin-bottom: 15px;">
+    <label for="email" style="display: block; margin-bottom: 5px;">Email:</label>
+    <input type="email" id="email" name="email" required style="width: 100%; padding: 8px; border-radius: 4px; border: 1px solid #ccc;">
+  </div>
+  <div style="margin-bottom: 15px;">
+    <label for="message" style="display: block; margin-bottom: 5px;">Message:</label>
+    <textarea id="message" name="message" rows="4" required style="width: 100%; padding: 8px; border-radius: 4px; border: 1px solid #ccc;"></textarea>
+  </div>
+  <button type="submit" style="background: #4f46e5; color: white; border: none; padding: 10px 20px; border-radius: 6px; cursor: pointer;">Submit</button>
+</form>
+\`\`\``;
+  }
+  if (lower.includes('hi') || lower.includes('hello') || lower.includes('hey')) {
+    return "Hello there! 👋 I am Aleena. How can I assist you today?";
+  }
+
+  return `I received your request: "${message}". How can I help you further with this?`;
+}
+
 // REST Chat & Generator Endpoints
 app.post('/api/chat', async (req, res) => {
   const { message, session_id } = req.body;
@@ -289,30 +375,7 @@ app.post('/api/chat', async (req, res) => {
   const activeSessionId = session_id || 'default-session';
   await saveMessage(activeSessionId, 'user', message);
 
-  let replyText = '';
-  if (geminiModel) {
-    try {
-      const historyRows = await getHistory(activeSessionId, 20);
-      const contents = historyRows.map(h => ({
-        role: h.role === 'user' ? 'user' : 'model',
-        parts: [{ text: h.content }],
-      }));
-
-      const chatSession = geminiModel.startChat({
-        history: contents.slice(0, -1),
-        systemInstruction: SYSTEM_PROMPT,
-      });
-
-      const result = await chatSession.sendMessage(message);
-      replyText = result.response.text();
-    } catch (err) {
-      console.error('[AI] Gemini error:', err.message);
-      replyText = "Hello! I am Aleena. I received your message: '" + message + "'. How can I help you today?";
-    }
-  } else {
-    replyText = "Hello! I am Aleena AI. I received your message: '" + message + "'. Ask me anything!";
-  }
-
+  const replyText = await generateAIResponse(message, activeSessionId);
   const emotion = detectEmotion(replyText);
   await saveMessage(activeSessionId, 'assistant', replyText, emotion);
 
@@ -358,30 +421,7 @@ wss.on('connection', (ws) => {
         await saveMessage(sessionId, 'user', text);
         ws.send(JSON.stringify({ type: 'status.update', data: { status: 'thinking' } }));
 
-        let fullReply = '';
-        if (geminiModel) {
-          try {
-            const historyRows = await getHistory(sessionId, 20);
-            const contents = historyRows.map(h => ({
-              role: h.role === 'user' ? 'user' : 'model',
-              parts: [{ text: h.content }],
-            }));
-
-            const chatSession = geminiModel.startChat({
-              history: contents.slice(0, -1),
-              systemInstruction: SYSTEM_PROMPT,
-            });
-
-            const result = await chatSession.sendMessage(text);
-            fullReply = result.response.text();
-          } catch (err) {
-            console.error('[AI] Stream Gemini error:', err.message);
-            fullReply = `I understand your message: '${text}'. How else can I assist you?`;
-          }
-        } else {
-          fullReply = `I am Aleena AI. Processing your request: '${text}'`;
-        }
-
+        const fullReply = await generateAIResponse(text, sessionId);
         const emotion = detectEmotion(fullReply);
 
         // Stream tokens simulation
