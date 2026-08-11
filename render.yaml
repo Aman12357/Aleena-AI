@@ -1,0 +1,52 @@
+# Render Infrastructure as Code Blueprint Specification for Aleena AI
+services:
+  # 1. Node.js & Express Production Backend Web Service
+  - type: web
+    name: aleena-ai-backend
+    env: node
+    region: oregon
+    plan: free
+    buildCommand: npm install && npm run migrate
+    startCommand: npm start
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: DATABASE_URL
+        fromDatabase:
+          name: aleena-ai-db
+          property: connectionString
+      - key: JWT_SECRET
+        generateValue: true
+      - key: FRONTEND_URL
+        value: https://aleena-ai-web.onrender.com
+
+  # 2. React / Next.js Production Frontend Static Site
+  - type: static
+    name: aleena-ai-web
+    env: static
+    region: oregon
+    rootDir: web
+    buildCommand: npm install && npm run build
+    publishDir: out
+    routes:
+      - type: rewrite
+        source: /*
+        destination: /index.html
+    envVars:
+      - key: NEXT_PUBLIC_API_URL
+        fromService:
+          type: web
+          name: aleena-ai-backend
+          property: url
+      - key: NEXT_PUBLIC_WS_URL
+        fromService:
+          type: web
+          name: aleena-ai-backend
+          property: url
+
+databases:
+  # 3. Render PostgreSQL Production Database
+  - name: aleena-ai-db
+    databaseName: aleena_ai_db
+    user: aleena_user
+    plan: free
