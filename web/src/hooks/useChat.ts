@@ -187,32 +187,55 @@ export function useChat() {
 
       setMessages((prev) => [...prev, userMsg]);
 
-      if (isConnected) {
-        send({ type: 'chat.send', data: { text: content, session_id: currentSessionId } });
-      } else {
-        // Mock response when offline
-        setIsStreaming(true);
-        const mockResponse = getMockResponse(content);
-        let i = 0;
+      // Send over WebSocket queue
+      send({ type: 'chat.send', data: { text: content, session_id: currentSessionId } });
 
-        streamRef.current = setInterval(() => {
-          if (i < mockResponse.length) {
-            setStreamingText((prev) => prev + mockResponse[i]);
-            i++;
-          } else {
-            if (streamRef.current) clearInterval(streamRef.current);
+      if (!isConnected) {
+        // REST API fallback when WebSocket is connecting/reconnecting
+        setIsStreaming(true);
+        const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'https://aleena-ai.onrender.com';
+        fetch(`${apiUrl.replace(/\/$/, '')}/api/chat`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ message: content, session_id: currentSessionId }),
+        })
+          .then((res) => res.json())
+          .then((data) => {
             setIsStreaming(false);
+            const aiResponseText = data.response || data.content || getMockResponse(content);
             const aiMsg: Message = {
               id: crypto.randomUUID?.() || String(Date.now()),
               role: 'assistant',
-              content: mockResponse,
+              content: aiResponseText,
               timestamp: Date.now(),
-              emotion: 'happy',
+              emotion: data.emotion || 'happy',
             };
             setMessages((prev) => [...prev, aiMsg]);
             setStreamingText('');
-          }
-        }, 20);
+          })
+          .catch(() => {
+            // Graceful offline mock fallback
+            const mockResponse = getMockResponse(content);
+            let i = 0;
+            streamRef.current = setInterval(() => {
+              if (i < mockResponse.length) {
+                setStreamingText((prev) => prev + mockResponse[i]);
+                i++;
+              } else {
+                if (streamRef.current) clearInterval(streamRef.current);
+                setIsStreaming(false);
+                const aiMsg: Message = {
+                  id: crypto.randomUUID?.() || String(Date.now()),
+                  role: 'assistant',
+                  content: mockResponse,
+                  timestamp: Date.now(),
+                  emotion: 'happy',
+                };
+                setMessages((prev) => [...prev, aiMsg]);
+                setStreamingText('');
+              }
+            }, 20);
+          });
       }
     },
     [isConnected, currentSessionId, send]

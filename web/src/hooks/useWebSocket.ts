@@ -6,15 +6,19 @@ import type { WebSocketMessage } from '@/types';
 function getWebSocketUrl(): string {
   if (typeof window === 'undefined') return 'ws://127.0.0.1:8765/ws';
 
-  const envWsUrl = process.env.NEXT_PUBLIC_WS_URL || process.env.NEXT_PUBLIC_API_URL;
+  let envWsUrl = process.env.NEXT_PUBLIC_WS_URL || process.env.NEXT_PUBLIC_API_URL;
   if (envWsUrl) {
+    envWsUrl = envWsUrl.trim();
+    if (envWsUrl.endsWith('/ws')) {
+      envWsUrl = envWsUrl.substring(0, envWsUrl.length - 3);
+    }
     if (envWsUrl.startsWith('http://')) {
       return envWsUrl.replace('http://', 'ws://') + '/ws';
     }
     if (envWsUrl.startsWith('https://')) {
       return envWsUrl.replace('https://', 'wss://') + '/ws';
     }
-    return envWsUrl.endsWith('/ws') ? envWsUrl : `${envWsUrl}/ws`;
+    return `${envWsUrl}/ws`;
   }
 
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -79,7 +83,7 @@ export function useWebSocket(url?: string): UseWebSocketReturn {
     } catch {
       setStatus('error');
     }
-  }, [url]);
+  }, [targetUrl]);
 
   useEffect(() => {
     connect();
